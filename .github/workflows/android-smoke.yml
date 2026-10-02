@@ -33,7 +33,7 @@ jobs:
       - name: Check out authentication service
         uses: actions/checkout@v4
         with:
-          repository: cookmcbook/AuthenticationService
+          repository: cookmcbook/Authentication-Service
           path: AuthenticationService
           token: ${{ secrets.SERVICE_REPO_TOKEN || github.token }}
 
