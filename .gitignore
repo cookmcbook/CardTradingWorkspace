@@ -1,0 +1,20 @@
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+
+# Checked-out service repositories
+/CardTradingPOC/
+/CardTradingBackend/
+/AuthenticationService/
+
+# Local tooling and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs and generated output
+*.log
+reports/
+artifacts/

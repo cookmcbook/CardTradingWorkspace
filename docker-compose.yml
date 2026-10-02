@@ -1,0 +1,91 @@
+name: cardtrading
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cardtrading}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cardtrading}
+      POSTGRES_DB: ${POSTGRES_DB:-cardtrading}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - cardtrading-postgres:/var/lib/postgresql/data
+      - ./ops/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  s3mock:
+    image: adobe/s3mock:5.2.3
+    environment:
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: cardtrading-media
+      COM_ADOBE_TESTING_S3MOCK_STORE_ROOT: /s3mockroot
+      COM_ADOBE_TESTING_S3MOCK_STORE_RETAIN_FILES_ON_EXIT: "true"
+    ports:
+      - "127.0.0.1:9000:9090"
+    volumes:
+      - cardtrading-media:/s3mockroot
+
+  auth:
+    build:
+      context: ./AuthenticationService
+    environment:
+      SERVER_PORT: 8081
+      AUTH_ISSUER_URI: ${AUTH_ISSUER_URI:-http://localhost:8082}
+      AUTH_JWT_KEY_ID: ${AUTH_JWT_KEY_ID:-cardtrading-auth-1}
+      AUTH_JWT_PRIVATE_KEY: ${AUTH_JWT_PRIVATE_KEY:?Set AUTH_JWT_PRIVATE_KEY in .env}
+      AUTH_JWT_PUBLIC_KEY: ${AUTH_JWT_PUBLIC_KEY:?Set AUTH_JWT_PUBLIC_KEY in .env}
+      AUTH_OWNER_BOOTSTRAP_TOKEN: ${AUTH_OWNER_BOOTSTRAP_TOKEN:-}
+      AUTH_CORS_ALLOWED_ORIGINS: ${AUTH_CORS_ALLOWED_ORIGINS:-http://localhost:8081}
+      AUTH_DATABASE_URL: jdbc:postgresql://postgres:5432/auth
+      AUTH_DATABASE_USERNAME: ${POSTGRES_USER:-cardtrading}
+      AUTH_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-cardtrading}
+    ports:
+      - "127.0.0.1:8082:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/.well-known/jwks.json >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: ./CardTradingBackend
+    environment:
+      SERVER_PORT: 8080
+      AUTH_ISSUER_URI: ${AUTH_ISSUER_URI:-http://localhost:8082}
+      AUTH_JWKS_URI: http://auth:8081/.well-known/jwks.json
+      AUTH_API_URL: http://auth:8081
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8081}
+      DATABASE_URL: jdbc:postgresql://postgres:5432/cardtrading
+      DATABASE_USERNAME: ${POSTGRES_USER:-cardtrading}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-cardtrading}
+      MEDIA_STORAGE_ENABLED: "true"
+      MEDIA_S3_ENDPOINT: http://s3mock:9090
+      MEDIA_S3_PUBLIC_ENDPOINT: https://horse.tail5f5662.ts.net:10002
+      MEDIA_S3_BUCKET: cardtrading-media
+      MEDIA_S3_REGION: us-east-1
+      MEDIA_S3_ACCESS_KEY: local
+      MEDIA_S3_SECRET_KEY: local
+      MEDIA_S3_PATH_STYLE: "true"
+      MEDIA_SIGNED_URL_SECONDS: "300"
+      MEDIA_RETENTION_DAYS: "30"
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+      s3mock:
+        condition: service_started
+
+volumes:
+  cardtrading-postgres:
+  cardtrading-media:
