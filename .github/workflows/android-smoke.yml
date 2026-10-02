@@ -1,0 +1,117 @@
+name: Android smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out workspace
+        uses: actions/checkout@v4
+
+      - name: Check out mobile app
+        uses: actions/checkout@v4
+        with:
+          repository: cookmcbook/CardTradingPOC
+          path: CardTradingPOC
+          token: ${{ secrets.SERVICE_REPO_TOKEN || github.token }}
+
+      - name: Check out game backend
+        uses: actions/checkout@v4
+        with:
+          repository: cookmcbook/CardTradingBackend
+          path: CardTradingBackend
+          token: ${{ secrets.SERVICE_REPO_TOKEN || github.token }}
+
+      - name: Check out authentication service
+        uses: actions/checkout@v4
+        with:
+          repository: cookmcbook/AuthenticationService
+          path: AuthenticationService
+          token: ${{ secrets.SERVICE_REPO_TOKEN || github.token }}
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: CardTradingPOC/package-lock.json
+
+      - name: Start backend services
+        env:
+          AUTH_JWT_PRIVATE_KEY: ${{ secrets.AUTH_JWT_PRIVATE_KEY }}
+          AUTH_JWT_PUBLIC_KEY: ${{ secrets.AUTH_JWT_PUBLIC_KEY }}
+          AUTH_OWNER_BOOTSTRAP_TOKEN: ${{ secrets.AUTH_OWNER_BOOTSTRAP_TOKEN }}
+        run: |
+          cat > .env <<EOF
+          POSTGRES_USER=cardtrading
+          POSTGRES_PASSWORD=cardtrading
+          POSTGRES_DB=cardtrading
+          AUTH_ISSUER_URI=http://localhost:8082
+          AUTH_CORS_ALLOWED_ORIGINS=http://10.0.2.2:8081
+          CORS_ALLOWED_ORIGINS=http://10.0.2.2:8081
+          AUTH_JWT_KEY_ID=cardtrading-auth-1
+          AUTH_JWT_PRIVATE_KEY=${AUTH_JWT_PRIVATE_KEY}
+          AUTH_JWT_PUBLIC_KEY=${AUTH_JWT_PUBLIC_KEY}
+          AUTH_OWNER_BOOTSTRAP_TOKEN=${AUTH_OWNER_BOOTSTRAP_TOKEN}
+          EOF
+          docker compose up -d --build
+
+      - name: Wait for authentication service
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent http://localhost:8082/.well-known/jwks.json >/dev/null; then
+              exit 0
+            fi
+            sleep 5
+          done
+          curl --fail --silent http://localhost:8082/.well-known/jwks.json >/dev/null
+
+      - name: Install mobile dependencies
+        working-directory: CardTradingPOC
+        run: npm ci
+
+      - name: Configure mobile API endpoints
+        working-directory: CardTradingPOC
+        run: |
+          cat > .env <<EOF
+          EXPO_PUBLIC_AUTH_URL=http://10.0.2.2:8082
+          EXPO_PUBLIC_API_URL=http://10.0.2.2:8080
+          EXPO_PUBLIC_GAME_REGION=us
+          EOF
+
+      - name: Start emulator and run Maestro
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
+          TEST_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: Medium_Phone
+          script: |
+            cd CardTradingPOC
+            npx expo run:android --variant debug --no-bundler
+            cd ..
+            curl -Ls https://get.maestro.mobile.dev | bash
+            export PATH="$HOME/.maestro/bin:$PATH"
+            maestro test --env TEST_EMAIL="$TEST_EMAIL" --env TEST_PASSWORD="$TEST_PASSWORD" CardTradingPOC/.maestro/signed-in.yml
+
+      - name: Collect Compose logs
+        if: always()
+        run: docker compose logs --no-color
