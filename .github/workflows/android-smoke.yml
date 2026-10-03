@@ -118,7 +118,7 @@ jobs:
           api-level: 34
           target: google_apis
           arch: x86_64
-          profile: medium_phone
+          profile: Nexus 5X
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           disable-animations: true
           script: |
