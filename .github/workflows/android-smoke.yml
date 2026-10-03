@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   smoke:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
       - name: Check out workspace
@@ -115,17 +115,18 @@ jobs:
       - name: Start emulator and run Maestro
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 34
           target: google_apis
           arch: x86_64
           profile: medium_phone
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
           script: |
             cd CardTradingPOC
             npx expo run:android --variant debug --no-bundler
-            cd ..
             curl -Ls https://get.maestro.mobile.dev | bash
             export PATH="$HOME/.maestro/bin:$PATH"
-            maestro test --env TEST_EMAIL="$TEST_EMAIL" --env TEST_PASSWORD="$TEST_PASSWORD" CardTradingPOC/.maestro/signed-in.yml
+            maestro test --env TEST_EMAIL="$TEST_EMAIL" --env TEST_PASSWORD="$TEST_PASSWORD" .maestro/signed-in.yml
 
       - name: Collect Compose logs
         if: always()
