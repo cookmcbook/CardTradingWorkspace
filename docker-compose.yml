@@ -54,11 +54,26 @@ services:
       timeout: 5s
       retries: 20
 
+  # Replays rival battles with the app's own engine; internal only, never published.
+  battle-verifier:
+    build:
+      context: ./CardTradingPOC
+      dockerfile: server/Dockerfile
+    environment:
+      BATTLE_VERIFIER_TOKEN: ${BATTLE_VERIFIER_TOKEN:-}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8090/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
   backend:
     build:
       context: ./CardTradingBackend
     environment:
       SERVER_PORT: 8080
+      BATTLE_VERIFIER_URL: http://battle-verifier:8090
+      BATTLE_VERIFIER_TOKEN: ${BATTLE_VERIFIER_TOKEN:-}
       AUTH_ISSUER_URI: ${AUTH_ISSUER_URI:-http://localhost:8082}
       AUTH_JWKS_URI: http://auth:8081/.well-known/jwks.json
       AUTH_API_URL: http://auth:8081
@@ -85,6 +100,8 @@ services:
         condition: service_healthy
       s3mock:
         condition: service_started
+      battle-verifier:
+        condition: service_healthy
 
 volumes:
   cardtrading-postgres:
