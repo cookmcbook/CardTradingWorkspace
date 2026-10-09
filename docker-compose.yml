@@ -67,6 +67,22 @@ services:
       timeout: 5s
       retries: 20
 
+  # Runs online matches between players; internal only, the backend speaks for each player.
+  match-service:
+    build:
+      context: ./CardTradingPOC
+      dockerfile: server/Dockerfile
+    command: ["tsx", "server/match-service.ts"]
+    environment:
+      MATCH_SERVICE_HOST: 0.0.0.0
+      MATCH_SERVICE_PORT: "8091"
+      MATCH_SERVICE_TOKEN: ${MATCH_SERVICE_TOKEN:-}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8091/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
   backend:
     build:
       context: ./CardTradingBackend
@@ -74,6 +90,8 @@ services:
       SERVER_PORT: 8080
       BATTLE_VERIFIER_URL: http://battle-verifier:8090
       BATTLE_VERIFIER_TOKEN: ${BATTLE_VERIFIER_TOKEN:-}
+      MATCH_SERVICE_URL: http://match-service:8091
+      MATCH_SERVICE_TOKEN: ${MATCH_SERVICE_TOKEN:-}
       AUTH_ISSUER_URI: ${AUTH_ISSUER_URI:-http://localhost:8082}
       AUTH_JWKS_URI: http://auth:8081/.well-known/jwks.json
       AUTH_API_URL: http://auth:8081
@@ -101,6 +119,8 @@ services:
       s3mock:
         condition: service_started
       battle-verifier:
+        condition: service_healthy
+      match-service:
         condition: service_healthy
 
 volumes:
