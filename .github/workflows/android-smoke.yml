@@ -11,7 +11,9 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    timeout-minutes: 75
+    env:
+      CI: '1'
     steps:
       - name: Check out workspace
         uses: actions/checkout@v4
@@ -51,6 +53,24 @@ jobs:
           cache: npm
           cache-dependency-path: CardTradingPOC/package-lock.json
 
+      - name: Enable and verify KVM
+        run: |
+          mkdir -p artifacts
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -r /dev/kvm && test -w /dev/kvm
+          "$ANDROID_HOME/emulator/emulator" -accel-check | tee artifacts/kvm.txt
+          free -h | tee artifacts/runner-memory.txt
+          df -h | tee artifacts/runner-disk.txt
+
+      - name: Install Maestro
+        run: |
+          curl --fail --silent --show-error --location https://get.maestro.mobile.dev -o "$RUNNER_TEMP/install-maestro.sh"
+          bash "$RUNNER_TEMP/install-maestro.sh"
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+          "$HOME/.maestro/bin/maestro" --version
+
       - name: Start backend services
         run: |
           openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /tmp/cardtrading-private.pem
@@ -59,6 +79,8 @@ jobs:
           bootstrap_token=$(openssl rand -hex 32)
           smoke_email="smoke-${GITHUB_RUN_ID}@example.test"
           smoke_password=$(openssl rand -hex 24)
+          echo "::add-mask::$smoke_password"
+          echo "::add-mask::$bootstrap_token"
           {
             echo "TEST_EMAIL=$smoke_email"
             echo "TEST_PASSWORD=$smoke_password"
@@ -92,9 +114,11 @@ jobs:
         run: |
           bootstrap_token=$(cat /tmp/cardtrading-bootstrap-token)
           curl --fail --silent --request POST http://localhost:8082/api/auth/register \
+            --output /tmp/cardtrading-register.json \
             --header 'Content-Type: application/json' \
             --data "{\"name\":\"CI Owner\",\"email\":\"$TEST_EMAIL\",\"password\":\"$TEST_PASSWORD\"}"
           curl --fail --silent --request POST http://localhost:8082/api/auth/bootstrap/owner \
+            --output /tmp/cardtrading-owner.json \
             --header 'Content-Type: application/json' \
             --header "X-Owner-Bootstrap-Token: $bootstrap_token" \
             --data "{\"email\":\"$TEST_EMAIL\"}"
@@ -112,21 +136,48 @@ jobs:
           EXPO_PUBLIC_GAME_REGION=us
           EOF
 
+      # Build before booting the emulator to avoid concurrent native compilation
+      # and emulator boot. Release embeds JS/assets and never depends on Metro.
+      - name: Build standalone smoke APK
+        working-directory: CardTradingPOC
+        timeout-minutes: 45
+        env:
+          SNAP_CARDS_SMOKE_TEST: '1'
+        run: |
+          npx expo prebuild --platform android --no-install
+          cd android
+          ./gradlew :app:assembleRelease -PreactNativeArchitectures=x86_64 --max-workers=2 --console=plain
+          test -s app/build/outputs/apk/release/app-release.apk
+
+      # The action kills an unbooted emulator before later steps can inspect it.
+      - name: Watch emulator boot diagnostics
+        run: |
+          timeout 1500s bash .github/scripts/watch-android-boot.sh > artifacts/boot-watcher.txt 2>&1 &
+
       - name: Start emulator and run Maestro
+        timeout-minutes: 25
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
           target: google_apis
           arch: x86_64
           profile: Nexus 5X
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          cores: 2
+          ram-size: 2048M
+          emulator-boot-timeout: 900
+          disable-linux-hw-accel: false
+          emulator-options: -no-window -gpu swiftshader -accel on -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
           disable-animations: true
-          script: |
-            cd CardTradingPOC
-            npx expo run:android --variant debug --no-bundler
-            curl -Ls https://get.maestro.mobile.dev | bash
-            export PATH="$HOME/.maestro/bin:$PATH"
-            maestro test --env TEST_EMAIL="$TEST_EMAIL" --env TEST_PASSWORD="$TEST_PASSWORD" .maestro/signed-in.yml
+          script: bash .github/scripts/run-android-smoke.sh
+
+      - name: Upload smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-smoke-diagnostics
+          path: artifacts/
+          retention-days: 7
+          if-no-files-found: warn
 
       - name: Collect Compose logs
         if: always()
