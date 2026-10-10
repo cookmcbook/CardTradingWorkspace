@@ -1,0 +1,11 @@
+[Unit]
+Description=Poll CardTrading service repositories for new commits
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=cardtrading-push-build.service
+
+[Install]
+WantedBy=timers.target
