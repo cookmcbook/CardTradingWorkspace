@@ -1,0 +1,86 @@
+services:
+  postgres:
+    platform: linux/arm/v7
+
+  s3mock: !reset null
+
+  seaweedfs:
+    platform: linux/arm/v7
+    image: chrislusf/seaweedfs:latest
+    command: ["server", "-s3", "-dir=/data"]
+    environment:
+      AWS_ACCESS_KEY_ID: ${MEDIA_S3_ACCESS_KEY:?Set MEDIA_S3_ACCESS_KEY in .env}
+      AWS_SECRET_ACCESS_KEY: ${MEDIA_S3_SECRET_KEY:?Set MEDIA_S3_SECRET_KEY in .env}
+    ports:
+      - "127.0.0.1:9000:8333"
+    volumes:
+      - cardtrading-media:/data
+    restart: unless-stopped
+
+  seaweedfs-init:
+    platform: linux/arm/v7
+    build:
+      context: ./ops/seaweedfs-init
+    environment:
+      S3_ENDPOINT: http://seaweedfs:8333
+      S3_BUCKET: ${MEDIA_S3_BUCKET:-cardtrading-media}
+      AWS_ACCESS_KEY_ID: ${MEDIA_S3_ACCESS_KEY:?Set MEDIA_S3_ACCESS_KEY in .env}
+      AWS_SECRET_ACCESS_KEY: ${MEDIA_S3_SECRET_KEY:?Set MEDIA_S3_SECRET_KEY in .env}
+      AWS_DEFAULT_REGION: us-east-1
+    depends_on:
+      seaweedfs:
+        condition: service_started
+    restart: "no"
+
+  auth:
+    platform: linux/arm/v7
+
+  battle-verifier:
+    platform: linux/arm/v7
+    build:
+      dockerfile: server/Dockerfile.armv7
+
+  match-service:
+    platform: linux/arm/v7
+    build:
+      dockerfile: server/Dockerfile.armv7
+
+  backend:
+    platform: linux/arm/v7
+    environment:
+      MEDIA_S3_ENDPOINT: http://seaweedfs:8333
+      MEDIA_S3_PUBLIC_ENDPOINT: ${MEDIA_S3_PUBLIC_ENDPOINT:?Set MEDIA_S3_PUBLIC_ENDPOINT in .env}
+      MEDIA_S3_BUCKET: ${MEDIA_S3_BUCKET:-cardtrading-media}
+      MEDIA_S3_ACCESS_KEY: ${MEDIA_S3_ACCESS_KEY:?Set MEDIA_S3_ACCESS_KEY in .env}
+      MEDIA_S3_SECRET_KEY: ${MEDIA_S3_SECRET_KEY:?Set MEDIA_S3_SECRET_KEY in .env}
+    depends_on: !override
+      postgres:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+      seaweedfs-init:
+        condition: service_completed_successfully
+      battle-verifier:
+        condition: service_healthy
+      match-service:
+        condition: service_healthy
+
+  backend-media-tests:
+    profiles: ["test"]
+    platform: linux/arm/v7
+    build:
+      context: ./CardTradingBackend
+      dockerfile: Dockerfile.test
+    environment:
+      S3_ENDPOINT: http://seaweedfs:8333
+      S3_BUCKET: ${MEDIA_S3_BUCKET:-cardtrading-media}
+      S3_ACCESS_KEY: ${MEDIA_S3_ACCESS_KEY:?Set MEDIA_S3_ACCESS_KEY in .env}
+      S3_SECRET_KEY: ${MEDIA_S3_SECRET_KEY:?Set MEDIA_S3_SECRET_KEY in .env}
+    depends_on:
+      seaweedfs-init:
+        condition: service_completed_successfully
+    volumes:
+      - cardtrading-maven-cache:/root/.m2
+
+volumes:
+  cardtrading-maven-cache:
