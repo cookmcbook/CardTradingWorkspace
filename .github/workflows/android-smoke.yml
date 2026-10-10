@@ -11,7 +11,7 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-22.04
-    timeout-minutes: 75
+    timeout-minutes: 90
     env:
       CI: '1'
     steps:
@@ -71,7 +71,34 @@ jobs:
           echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
           "$HOME/.maestro/bin/maestro" --version
 
+      - name: Validate registry retry handling
+        run: sh .github/scripts/retry-registry.test.sh
+
+      - name: Check optional Docker Hub credentials
+        id: dockerhub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [[ -z "$DOCKERHUB_USERNAME" && -z "$DOCKERHUB_TOKEN" ]]; then
+            echo 'No Docker Hub credentials configured; retaining the runner default authentication.'
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+          elif [[ -z "$DOCKERHUB_USERNAME" || -z "$DOCKERHUB_TOKEN" ]]; then
+            echo '::error::Set both DOCKERHUB_USERNAME and DOCKERHUB_TOKEN, or leave both unset.'
+            exit 1
+          else
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to Docker Hub (optional)
+        if: steps.dockerhub.outputs.enabled == 'true'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Start backend services
+        timeout-minutes: 30
         run: |
           openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /tmp/cardtrading-private.pem
           private_key=$(openssl pkcs8 -topk8 -nocrypt -in /tmp/cardtrading-private.pem -outform DER | base64 -w0)
@@ -97,7 +124,7 @@ jobs:
           AUTH_JWT_PUBLIC_KEY=${public_key}
           AUTH_OWNER_BOOTSTRAP_TOKEN=${bootstrap_token}
           EOF
-          docker compose up -d --build
+          sh .github/scripts/start-smoke-services.sh
           printf '%s\n' "$bootstrap_token" > /tmp/cardtrading-bootstrap-token
 
       - name: Wait for authentication service
